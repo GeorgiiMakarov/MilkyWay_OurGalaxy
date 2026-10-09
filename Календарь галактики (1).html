@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Календарь галактики</title>
+<style>
+:root{--bg:#02030a;--fg:#e8eefc;--dim:#8fa0c8;--ac:#4fd8ff;--pn:rgba(8,12,28,.8);box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none}
+canvas{position:absolute;inset:0;display:block;touch-action:none}
+button{background:var(--pn);color:var(--fg);border:1px solid #2b3a66;border-radius:18px;padding:7px 12px;font:inherit;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+button.on{border-color:var(--ac);color:var(--ac)}
+#bar{position:absolute;top:calc(8px + env(safe-area-inset-top,0px));left:8px;right:8px;display:flex;gap:6px;justify-content:center}
+#hud{position:absolute;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));max-width:560px;margin:0 auto;background:var(--pn);border:1px solid #1d2a50;border-radius:14px;padding:10px 12px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+#date{font:600 16px system-ui,sans-serif;font-variant-numeric:tabular-nums;color:var(--ac)}
+#info{color:var(--dim);margin:4px 0 8px;white-space:pre-line;font-size:12px}
+#row{display:flex;gap:8px;align-items:center}
+#row input{flex:1;min-width:0;accent-color:var(--ac)}
+#fade{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .45s}
+</style></head><body>
+<div id="fade"></div><div id="bar"></div>
+<div id="hud"><div id="date"></div><div id="info"></div>
+<div id="row"><button id="pp">⏸</button><input id="sp" type="range" min="0" max="8" step="1"><button id="nw">Сейчас</button><button id="fr" style="display:none">Система: ☀️</button></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const D2R=Math.PI/180,V3=(x=0,y=0,z=0)=>new THREE.Vector3(x,y,z),$=i=>document.getElementById(i);
+const J2000=946728000,YR=31557600,AUKM=1.495978707e8,AU=40,EPS=23.44*D2R,R_LY=26670,VC=233;
+const OM=VC/(R_LY*9.4607304725808e12),PER=2*Math.PI/OM/YR/1e6;
+// галактические оси в эклиптической системе сцены: к центру, к l=90° (Лебедь), к северному полюсу Галактики
+const gc=V3(-.0549,-.0978,.9937).normalize(),ngp=V3(-.8671,.4981,.0003).normalize(),l90=V3().crossVectors(ngp,gc).normalize();
+const vS=V3().addScaledVector(gc,11.1).addScaledVector(l90,VC).addScaledVector(ngp,7.25),VT=vS.length(),vh=vS.clone().normalize(),KU=VT*YR/AUKM*AU;
+const NOW0=Date.now()/1000,RATES=[['1 с (реальное время)',1],['1 мин',60],['1 час',3600],['1 сутки',86400],['1 месяц',2629800],['1 год',YR],['1000 лет',YR*1e3],['1 млн лет',YR*1e6],['10 млн лет',YR*1e7]],DEF={galaxy:7,solar:4,earth:2};
+let T=NOW0,ri=7,paused=false,view='galaxy',busy=false,frameGal=false,fol=null,fc=0;
+const ren=new THREE.WebGLRenderer({antialias:true}),scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(55,1,.1,60000),cv=ren.domElement;
+ren.setPixelRatio(Math.min(devicePixelRatio||1,2));document.body.prepend(cv);
+const rs=()=>{ren.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()};addEventListener('resize',rs);rs();
+const mkLine=(pts,color,op=1)=>new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color,transparent:op<1,opacity:op}));
+const circ=(r,n=128)=>{const q=[];for(let i=0;i<=n;i++){const a=i/n*6.2832;q.push(V3(r*Math.cos(a),0,-r*Math.sin(a)))}return q};
+{const p=[];for(let i=0;i<1500;i++){const v=V3(Math.random()-.5,Math.random()-.5,Math.random()-.5).normalize().multiplyScalar(30000);p.push(v.x,v.y,v.z)}
+const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));scene.add(new THREE.Points(g,new THREE.PointsMaterial({size:1.6,sizeAttenuation:false,color:0x9fb4e0})))}
+
+// ---------- ГАЛАКТИКА: 1 ед. = 100 св. лет, рукава с наклоном 12,5°, Солнце между рукавами у Местного рукава ----------
+const G=new THREE.Group(),GR=new THREE.Group();G.add(GR);scene.add(G);
+const vc=r=>VC*(1-Math.exp(-r/30)),wR=r=>vc(r)/r*.033357,WP=wR(266.7),gu={uM:{value:0},uOp:{value:WP},uS:{value:1}};
+{const N=60000,p=new Float32Array(N*3),st=new Float32Array(N*4),c=new Float32Array(N*3),col=new THREE.Color(),b=Math.tan(12.5*D2R),rn=()=>Math.random()+Math.random()+Math.random()-1.5;
+for(let i=0;i<N;i++){let r,a,y,w=WP,k=0,u=Math.random();
+if(u<.1){r=Math.abs(rn())*45+5;a=Math.random()*6.283;y=rn()*r*.35;w=wR(r);col.setHex(0xffcc88)}
+else if(u<.17){const s=Math.random()*2-1,q=rn()*22*Math.exp(-Math.abs(s)*.8);r=Math.hypot(s*100,q);a=Math.atan2(q,s*100)+2.04;y=rn()*5;col.setHex(0xffd9a0)}
+else if(u<.67){r=Math.min(480,25-Math.log(1-Math.random()*.97)*85);a=Math.random()*6.283;y=rn()*7*Math.exp(-r/400);w=wR(r);k=.5;col.setHex(Math.random()<.5?0xffe2b8:0xcfe0ff)}
+else if(u<.677){r=258+Math.random()*17;a=Math.PI/2-Math.log(r/266.7)/.176+rn()*.05;y=rn()*3;col.setHex(0xffe9b0)}
+else{let m=Math.random(),j=0;const W=[.19,.31,.19];while(j<3&&m>W[j]){m-=W[j];j++}
+r=110+Math.pow(Math.random(),1.1)*350;a=-Math.log(r/35)/b+.522+j*Math.PI/2+rn()*(.22+16/r);y=rn()*3*Math.exp(-r/500);col.setHex(Math.random()<.3?0xff99b8:0x9cc4ff)}
+p[i*3+1]=y;st.set([r,a,w,k],i*4);c.set([col.r,col.g,col.b],i*3)}
+const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(p,3));g.setAttribute('st',new THREE.BufferAttribute(st,4));g.setAttribute('col',new THREE.BufferAttribute(c,3));
+const pts=new THREE.Points(g,new THREE.ShaderMaterial({uniforms:gu,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,
+vertexShader:`attribute vec3 col;attribute vec4 st;uniform float uM,uOp,uS;varying vec3 vC;
+void main(){float th=st.y+st.z*uM,D=.5+.5*cos(4.*(th-uOp*uM+log(st.x/35.)/.2217-.522));
+vC=col*mix(1.,.2+1.6*D*D,st.w);vec4 mv=modelViewMatrix*vec4(st.x*cos(th),position.y,st.x*sin(th),1.);
+gl_PointSize=clamp(uS*2.6/-mv.z,1.8,24.);gl_Position=projectionMatrix*mv;}`,
+fragmentShader:`varying vec3 vC;void main(){float d=length(gl_PointCoord-.5);if(d>.5)discard;gl_FragColor=vec4(vC*(1.-2.*d)*.9,1.);}`}));
+pts.frustumCulled=false;GR.add(pts)}
+GR.add(new THREE.Mesh(new THREE.SphereGeometry(22,24,16),new THREE.MeshBasicMaterial({color:0xffcf80,transparent:true,opacity:.22,blending:THREE.AdditiveBlending,depthWrite:false})),new THREE.Mesh(new THREE.SphereGeometry(3,16,12),new THREE.MeshBasicMaterial({color:0xfff4d6})),mkLine(circ(266.7),0x4fd8ff,.35));
+const sunM=new THREE.Group();sunM.position.set(0,0,266.7);GR.add(sunM);
+const halo=new THREE.Mesh(new THREE.RingGeometry(6,8,40),new THREE.MeshBasicMaterial({color:0x4fd8ff,side:THREE.DoubleSide,transparent:true,opacity:.85,blending:THREE.AdditiveBlending}));halo.rotation.x=Math.PI/2;
+sunM.add(new THREE.Mesh(new THREE.SphereGeometry(3,16,12),new THREE.MeshBasicMaterial({color:0xffe600})),halo,new THREE.ArrowHelper(V3(-1,0,0),V3(),34,0x4fd8ff,9,5));
+
+// ---------- СОЛНЕЧНАЯ СИСТЕМА: 1 а.е. = 40 ед., орбиты и периоды по средним долготам J2000 ----------
+const S=new THREE.Group();S.visible=false;scene.add(S);
+S.add(new THREE.AmbientLight(0x303848,.9),new THREE.PointLight(0xffffff,1.3,0,0),new THREE.Mesh(new THREE.SphereGeometry(6,24,16),new THREE.MeshBasicMaterial({color:0xfff0b0})));
+const PL=[['Меркурий',.387,252.2503,4.0923344,2.2,0xb5b5b5],['Венера',.7233,181.9791,1.6021302,3.2,0xe8c27a],['Земля',1,100.4646,.9856003,3.4,0x3b82f6],['Марс',1.5237,355.4466,.5240207,2.6,0xd2693c],['Юпитер',5.2026,34.3964,.0830853,8,0xd8a878]];
+const pm=PL.map(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(p[4],16,12),new THREE.MeshLambertMaterial({color:p[5],emissive:0x151515}));S.add(m,mkLine(circ(p[1]*AU),0x34456f));return m}),earthS=pm[2];
+const er=new THREE.Mesh(new THREE.RingGeometry(6,7.5,32),new THREE.MeshBasicMaterial({color:0x4fd8ff,side:THREE.DoubleSide,transparent:true,opacity:.8}));er.rotation.x=Math.PI/2;earthS.add(er);
+S.add(new THREE.ArrowHelper(vh,V3(),70,0xff9a3c,12,7),new THREE.ArrowHelper(gc,V3(),70,0xffd24d,12,7));
+const gp=new THREE.Mesh(new THREE.RingGeometry(255,258,128),new THREE.MeshBasicMaterial({color:0xa070ff,side:THREE.DoubleSide,transparent:true,opacity:.5}));gp.quaternion.setFromUnitVectors(V3(0,0,1),ngp);S.add(gp);
+// система отсчёта «Галактика»: честный след Земли (пологая волна), след Солнца и поток звёзд
+const NT=300,tp=new Float32Array(NT*3),tg=new THREE.BufferGeometry();tg.setAttribute('position',new THREE.BufferAttribute(tp,3));
+const eTrail=new THREE.Line(tg,new THREE.LineBasicMaterial({color:0x4fd8ff})),sTrail=mkLine([V3(),V3()],0xff9a3c);
+const NS=500,sp0=[],sf=new Float32Array(NS*3);for(let i=0;i<NS*3;i++)sp0.push((Math.random()-.5)*8000);
+const sg=new THREE.BufferGeometry();sg.setAttribute('position',new THREE.BufferAttribute(sf,3));const flow=new THREE.Points(sg,new THREE.PointsMaterial({size:2,sizeAttenuation:false,color:0xffffff}));
+[eTrail,sTrail,flow].forEach(o=>{o.frustumCulled=false;o.visible=false;S.add(o)});
+
+// ---------- ЗЕМЛЯ: 1 ед. = радиус Земли, Луна и Солнце в истинном масштабе ----------
+const tex=(()=>{const c=document.createElement('canvas');c.width=512;c.height=256;const x=c.getContext('2d');x.fillStyle='#0b3d7a';x.fillRect(0,0,512,256);x.fillStyle='#2f7d3a';
+[[-100,45,28,18],[-60,-15,13,26],[55,48,65,17],[20,5,20,28],[135,-25,14,9],[-42,72,16,8]].forEach(([lo,la,rx,ry])=>{x.beginPath();x.ellipse((lo+180)*512/360,(90-la)*256/180,rx*512/360,ry*256/180,0,0,7);x.fill()});
+x.fillStyle='#e8f0f8';x.fillRect(0,236,512,20);x.fillRect(0,0,512,10);x.strokeStyle='rgba(255,255,255,.07)';
+for(let i=0;i<=12;i++){x.beginPath();x.moveTo(i*512/12,0);x.lineTo(i*512/12,256);x.stroke()}for(let j=1;j<6;j++){x.beginPath();x.moveTo(0,j*256/6);x.lineTo(512,j*256/6);x.stroke()}
+x.strokeStyle='#ff4d4d';x.lineWidth=3;x.beginPath();x.moveTo(256,0);x.lineTo(256,256);x.stroke();return new THREE.CanvasTexture(c)})();
+const E=new THREE.Group();E.visible=false;scene.add(E);
+const tilt=new THREE.Group();tilt.rotation.x=-EPS;E.add(tilt);
+const earth=new THREE.Mesh(new THREE.SphereGeometry(1,48,32),new THREE.MeshPhongMaterial({map:tex,shininess:8,emissive:0x04080f}));tilt.add(earth,mkLine([V3(0,-1.8,0),V3(0,1.8,0)],0x4fd8ff));
+const sunL=new THREE.DirectionalLight(0xffffff,1.3),sunE=new THREE.Mesh(new THREE.SphereGeometry(.69,16,12),new THREE.MeshBasicMaterial({color:0xfff0b0}));
+E.add(sunL,sunE,new THREE.AmbientLight(0x2a3a5a,.9));
+const moonO=new THREE.Group();moonO.rotation.x=-5.145*D2R;E.add(moonO);
+const moon=new THREE.Mesh(new THREE.SphereGeometry(.273,24,16),new THREE.MeshPhongMaterial({color:0xbbbbbb}));moonO.add(moon,mkLine(circ(60.3),0x556080,.6));
+const mk=c=>{const a=new THREE.ArrowHelper(V3(1,0,0),V3(),3,c,.5,.3);E.add(a);return a},aO=mk(0x4fd8ff),aS=mk(0xff9a3c),aT=mk(0xffffff);
+
+// ---------- камера и жесты ----------
+const cs={th:0,ph:.75,d:760,gd:760,tg:V3(),gtg:V3()},lim={galaxy:[25,3000],solar:[40,9000],earth:[2.5,400]},CAMS={galaxy:[760,.75,0],solar:[330,1,.5],earth:[7,1.25,.6]};
+const zoom=f=>{cs.gd=Math.min(lim[view][1],Math.max(lim[view][0],cs.gd*f))};
+const P=new Map();let mv=0,t0=0,pd=0;
+const pinchD=()=>{if(P.size!==2)return 0;const a=[...P.values()];return Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1])};
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);P.set(e.pointerId,[e.clientX,e.clientY]);mv=0;t0=performance.now();pd=pinchD()});
+cv.addEventListener('pointermove',e=>{const o=P.get(e.pointerId);if(!o)return;const n=[e.clientX,e.clientY];P.set(e.pointerId,n);mv+=Math.abs(n[0]-o[0])+Math.abs(n[1]-o[1]);
+if(P.size===1){cs.th-=(n[0]-o[0])*.006;cs.ph=Math.min(3.09,Math.max(.05,cs.ph-(n[1]-o[1])*.006))}
+else if(P.size===2){const d=pinchD();if(pd)zoom(pd/d);pd=d}});
+cv.addEventListener('pointerup',e=>{if(P.size===1&&mv<10&&performance.now()-t0<500)tap(e.clientX,e.clientY);P.delete(e.pointerId);pd=0});
+cv.addEventListener('pointercancel',e=>{P.delete(e.pointerId);pd=0});
+cv.addEventListener('wheel',e=>{e.preventDefault();zoom(e.deltaY>0?1.12:.89)},{passive:false});
+const sunW=()=>{scene.updateMatrixWorld(true);return sunM.getWorldPosition(V3())};
+function camU(){if(fol==='sun')cs.gtg.copy(sunW());else if(fol==='earth')cs.gtg.copy(earthS.position);
+cs.d+=(cs.gd-cs.d)*.09;cs.tg.lerp(cs.gtg,.09);const s=Math.sin(cs.ph)*cs.d;cam.position.set(cs.tg.x+s*Math.sin(cs.th),cs.tg.y+cs.d*Math.cos(cs.ph),cs.tg.z+s*Math.cos(cs.th));cam.lookAt(cs.tg)}
+const scr=v=>{const p=v.clone().project(cam);return[(p.x+1)/2*innerWidth,(1-p.y)/2*innerHeight,p.z]};
+function tap(x,y){if(busy)return;const s=view==='galaxy'?scr(sunW()):view==='solar'?scr(earthS.position):null;if(s&&s[2]<1&&Math.hypot(s[0]-x,s[1]-y)<48)go(view==='galaxy'?'solar':'earth')}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms)),sp=$('sp'),fr=$('fr');sp.value=ri;
+async function go(v){if(busy||v===view)return;busy=true;
+if(view==='galaxy'&&v!=='galaxy'){fol='sun';cs.gd=26;await sleep(1300)}
+else if(view==='solar'&&v==='earth'){fol='earth';cs.gd=40;await sleep(1000)}
+$('fade').style.opacity=1;await sleep(450);
+fol=null;view=v;G.visible=v==='galaxy';S.visible=v==='solar';E.visible=v==='earth';
+const c=CAMS[v];cs.d=cs.gd=c[0];cs.ph=c[1];cs.th=c[2];cs.tg.set(0,0,0);cs.gtg.set(0,0,0);
+if(v==='solar'&&frameGal){cs.d=cs.gd=3600;cs.ph=1.5708;cs.th=-.222}
+ri=DEF[v];sp.value=ri;fr.style.display=v==='solar'?'':'none';
+['galaxy','solar','earth'].forEach(k=>$('b_'+k).classList.toggle('on',k===view));
+$('fade').style.opacity=0;await sleep(450);busy=false}
+[['galaxy','🌌 Галактика'],['solar','☀️ Солнечная'],['earth','🌍 Земля']].forEach(([k,t])=>{const b=document.createElement('button');b.id='b_'+k;b.textContent=t;b.onclick=()=>go(k);$('bar').append(b)});
+$('b_galaxy').classList.add('on');
+sp.oninput=()=>{ri=+sp.value};
+$('pp').onclick=e=>{paused=!paused;e.target.textContent=paused?'▶':'⏸'};
+$('nw').onclick=()=>{T=Date.now()/1000};
+fr.onclick=()=>{frameGal=!frameGal;fr.textContent=frameGal?'Система: 🌌':'Система: ☀️';[eTrail,sTrail,flow].forEach(o=>o.visible=frameGal);
+if(view==='solar'){cs.gd=frameGal?3600:330;cs.ph=frameGal?1.5708:1;cs.th=frameGal?-.222:.5}};
+
+// ---------- время и физика ----------
+const nf=(v,n=1)=>v.toLocaleString('ru',{maximumFractionDigits:n});
+function fmt(){const y=(T-NOW0)/YR;if(Math.abs(y)<7000)return new Date(T*1000).toISOString().slice(0,19).replace('T',' ')+' UTC';return(y>0?'+':'')+(Math.abs(y)>=1e6?nf(y/1e6)+' млн лет':nf(Math.round(y),0)+' лет')}
+function hudText(sum){let s='Темп: 1 с = '+RATES[ri][0]+(paused?' · пауза':'')+'\n';
+if(view==='galaxy')s+=`Солнце: ${nf(R_LY,0)} св. лет от центра, ${VC} км/с, оборот ≈ ${nf(PER,0)} млн лет. Звёзды обращаются по кривой вращения (в центре быстрее), рукава это волна плотности. 1 ед. = 100 св. лет.\nТап по жёлтой метке Солнца → Солнечная система.`;
+else if(view==='solar')s+=`1 а.е. = 40 ед.; размеры тел не в масштабе. Солнце уходит на ${nf(VT*YR/AUKM)} а.е. за земной год к Лебедю (оранжевая стрелка), жёлтая к центру Галактики, кольцо плоскость Галактики. Земля: ${nf(sum.length(),0)} км/с.\nТап по Земле → вид Земли.`;
+else s+=`1 ед. = радиус Земли; Луна и Солнце в масштабе. Ось 23,44°. Стрелки: оранжевая Солнце в Галактике, голубая орбита Земли, белая сумма ${nf(sum.length(),0)} км/с.`+(ri>=4?'\nНа таком темпе вращение мерцает.':'');
+return s}
+function step(){const d=(T-J2000)/86400;
+const uM=(T-NOW0)/(YR*1e6),ths=Math.PI/2+WP*uM;gu.uM.value=uM;gu.uS.value=ren.getPixelRatio()*innerHeight/2;sunM.position.set(266.7*Math.cos(ths),0,266.7*Math.sin(ths));sunM.children[2].setDirection(V3(-Math.sin(ths),0,Math.cos(ths)));const pu=1+.25*Math.sin(performance.now()*.005);halo.scale.set(pu,pu,pu);
+pm.forEach((m,i)=>{const p=PL[i],L=(p[2]+p[3]*d)*D2R;m.position.set(p[1]*AU*Math.cos(L),0,-p[1]*AU*Math.sin(L))});
+const Le=(PL[2][2]+PL[2][3]*d)*D2R,ep=V3(Math.cos(Le),0,-Math.sin(Le)),th=V3(-Math.sin(Le),0,-Math.cos(Le)),sum=vS.clone().addScaledVector(th,29.78);
+earth.rotation.y=((280.46061837+360.98564736629*d)%360)*D2R;
+const Lm=(218.316+13.176396*d)*D2R;moon.position.set(60.3*Math.cos(Lm),0,-60.3*Math.sin(Lm));
+const sd=ep.clone().negate();sunL.position.copy(sd).multiplyScalar(100);sunE.position.copy(sd).multiplyScalar(150);
+aO.setDirection(th);aO.setLength(2.98,.4,.25);aS.setDirection(vh);aS.setLength(VT*.1,.8,.5);aT.setDirection(sum.clone().normalize());aT.setLength(sum.length()*.1,.8,.5);
+if(frameGal&&view==='solar'){const W=1.5;
+for(let i=0;i<NT;i++){const dy=W*i/(NT-1),L=(PL[2][2]+PL[2][3]*(d-dy*365.25))*D2R,k=dy*KU;tp[i*3]=AU*Math.cos(L)-vh.x*k;tp[i*3+1]=-vh.y*k;tp[i*3+2]=-AU*Math.sin(L)-vh.z*k}
+tg.attributes.position.needsUpdate=true;
+const sa=sTrail.geometry.attributes.position;sa.setXYZ(1,-vh.x*W*KU,-vh.y*W*KU,-vh.z*W*KU);sa.needsUpdate=true;
+const s=KU*(T-NOW0)/YR;for(let i=0;i<NS;i++)for(let j=0;j<3;j++){const v=sp0[i*3+j]-vh.getComponent(j)*s;sf[i*3+j]=((v+4000)%8000+8000)%8000-4000}
+sg.attributes.position.needsUpdate=true}
+if(++fc%5===0){$('date').textContent=fmt();$('info').textContent=hudText(sum)}}
+let last=performance.now();
+function loop(t){requestAnimationFrame(loop);const dt=Math.min((t-last)/1000,.1);last=t;if(!paused)T+=dt*RATES[ri][1];step();camU();ren.render(scene,cam)}
+requestAnimationFrame(loop);
+</script></body></html>
