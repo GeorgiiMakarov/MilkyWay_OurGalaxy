@@ -93,7 +93,7 @@ const moon=new THREE.Mesh(new THREE.SphereGeometry(.273,24,16),new THREE.MeshPho
 const mk=c=>{const a=new THREE.ArrowHelper(V3(1,0,0),V3(),3,c,.5,.3);E.add(a);return a},aO=mk(0x4fd8ff),aS=mk(0xff9a3c),aT=mk(0xffffff);
 
 // ---------- камера и жесты ----------
-const cs={th:0,ph:.75,d:760,gd:760,tg:V3(),gtg:V3()},lim={galaxy:[25,3000],solar:[40,9000],earth:[2.5,400]},CAMS={galaxy:[760,.75,0],solar:[330,1,.5],earth:[7,1.25,.6]};
+const fitGalaxyD=()=>Math.min(3000,Math.max(760,530/(Math.tan(27.5*D2R)*(innerWidth/innerHeight)))),cs={th:0,ph:.75,d:fitGalaxyD(),gd:fitGalaxyD(),tg:V3(),gtg:V3()},lim={galaxy:[25,3000],solar:[40,9000],earth:[2.5,400]},CAMS={galaxy:[760,.75,0],solar:[330,1,.5],earth:[7,1.25,.6]};
 const zoom=f=>{cs.gd=Math.min(lim[view][1],Math.max(lim[view][0],cs.gd*f))};
 const P=new Map();let mv=0,t0=0,pd=0;
 const pinchD=()=>{if(P.size!==2)return 0;const a=[...P.values()];return Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1])};
@@ -115,7 +115,7 @@ if(view==='galaxy'&&v!=='galaxy'){fol='sun';cs.gd=26;await sleep(1300)}
 else if(view==='solar'&&v==='earth'){fol='earth';cs.gd=40;await sleep(1000)}
 $('fade').style.opacity=1;await sleep(450);
 fol=null;view=v;G.visible=v==='galaxy';S.visible=v==='solar';E.visible=v==='earth';
-const c=CAMS[v];cs.d=cs.gd=c[0];cs.ph=c[1];cs.th=c[2];cs.tg.set(0,0,0);cs.gtg.set(0,0,0);
+const c=CAMS[v].slice();if(v==='galaxy')c[0]=fitGalaxyD();cs.d=cs.gd=c[0];cs.ph=c[1];cs.th=c[2];cs.tg.set(0,0,0);cs.gtg.set(0,0,0);
 if(v==='solar'&&frameGal){cs.d=cs.gd=3600;cs.ph=1.5708;cs.th=-.222}
 ri=DEF[v];sp.value=ri;fr.style.display=v==='solar'?'':'none';
 ['galaxy','solar','earth'].forEach(k=>$('b_'+k).classList.toggle('on',k===view));
